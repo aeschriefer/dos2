@@ -173,11 +173,3 @@ upgrade(bloody.stats, list(misc=-10, extra.crit.multi=10, extra.crit.chance=5, e
 
 # effect of using bloody arrows. Bow and level dependent
 upgrade(bow.stats, bloody.stats['extra.dmg'])
-
-attack(bow.stats, high.ground=T, crit.calc='yes')
-attack(bow.stats, high.ground=T, crit.calc='no', )
-attack(bloody.stats, high.ground=T, crit.calc='yes', )
-attack(bloody.stats, high.ground=T, crit.calc='no', )
-
-attack(bow.stats, high.ground=F, crit.calc='yes', )
-attack(bow.stats, high.ground=F, crit.calc='no', )
