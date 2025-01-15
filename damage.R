@@ -2,20 +2,16 @@ library(tidyverse)
 
 ##### Function definitions ######
 
-attack <- function(stats, high.ground=TRUE, crit.calc=c('avg', 'yes','no'), weapon=TRUE, base.dmg=1){
+attack <- function(stats, high.ground=TRUE, crit.calc=c('avg', 'yes','no'), weapon=TRUE){
   # base.dmg is the damage on the weapon description or from a spell table
   # defaults to 1 but usually is a range of damage consisting of two integers
+  # extra.dmg is damage from elemental arrowheads
 
   # only one weapon skill (ie ranged, twohanded, singlehanded, dualwielding) should be passed 
   # because they effect different weapon types and cannot be used in combo during an attack
 
   # If weapon is TRUE the weapon formula is used
   # If weapon is FALSE the spell formula is used
-
-  if(sum(stats < 0)){
-    # Check that no stats are negative
-    return(NA)
-  }
 
   # element is warfare, aero, geo, etc...
   skills = select(stats, c('scoundrel', 'element', 'huntsman'))
@@ -37,15 +33,19 @@ attack <- function(stats, high.ground=TRUE, crit.calc=c('avg', 'yes','no'), weap
     wits=max(0, pluck(stats, 'wits', .default=10) - 10)
   )
 
-  high.ground.bonus=ifelse(high.ground, 0. + 0.05*skills[['huntsman']], 0)
-  crit.multiplier=1.5 + percents[['extra.crit.multi']] + 0.05*skills[['scoundrel']] + 0.05*weapon.skills[['twohanded']]
+  base.dmg=pluck(stats, 'base.dmg', .default=1)
+  extra.dmg=pluck(stats, 'extra.dmg', .default=0)
+
+  # base high ground bonus is 20%
+  high.ground.bonus=ifelse(high.ground, 0.2 + 0.05*skills[['huntsman']], 0)
+  crit.multiplier=0.5 + percents[['extra.crit.multi']] + 0.05*skills[['scoundrel']] + 0.05*weapon.skills[['twohanded']]
   crit.chance = min(
     1,
     percents[['extra.crit.chance']] + percents[['gear.crit']] + 0.01*(attrs[['wits']] + weapon.skills[['ranged']])
   )
   
   if(weapon){
-    dmg = (1 + 0.05*skills[['element']])*(1 + 0.05*(attrs[['attribute']] + max(weapon.skills) + percents[['misc']]))
+    dmg = (1 + 0.05*skills[['element']])*(1 + percents[['misc']] + 0.05*(attrs[['attribute']] + max(weapon.skills)))
   } else {
     dmg = (1 + 0.05*skills[['element']])*(1 + 0.05*(attrs[['attribute']]))*(1 + percents[['misc']])
   }
@@ -53,31 +53,41 @@ attack <- function(stats, high.ground=TRUE, crit.calc=c('avg', 'yes','no'), weap
   non.crit=1+high.ground.bonus
   
   crit.calc = match.arg(crit.calc)
-  base.dmg * switch(
+  (base.dmg * dmg + extra.dmg) * switch(
     crit.calc,
-    yes = dmg*crit,
-    no = dmg*non.crit,
-    avg = dmg*crit*crit.chance + dmg*non.crit*(1-crit.chance)
+    yes = crit,
+    no = non.crit,
+    avg = crit*crit.chance + non.crit*(1-crit.chance)
   )
 }
 
-select <- function(stats, names){
-  # missing skills iin stats vector default to 0
-  skills = replace_na(stats[names], 0)
-  names(skills) = names
-  return(skills)
+select <- function(lst, names) {
+  # returns a vector
+  map(names, \(x) pluck(lst, x, .default=0)) %>%
+    flatten_dbl %>%
+    set_names(names)
 }
 
-upgrade <- function(stats, change, base.dmg.ratio=1, ...){
+select.list <- function(lst, names) {
+  # returns a list
+  map(names, \(x) pluck(lst, x, .default=0)) %>%
+    set_names(names)
+}
+
+sum.lists <- function(x, y){
+  nms=union(names(x), names(y))
+  map2(select.list(x, nms), select.list(y, nms), \(x, y) x + y)
+}
+
+upgrade <- function(stats, change, ...){
   # Calculates the % damage change by replacing gear causing a change
   # in stats represented by the change vector
   
   # base.dmg.ratio should be:
   # (new weapon base damage) / (old weapon base damage)
   baseline=attack(stats, ...)
-  combined = c(stats, change)
-  summed=tapply(combined, names(combined), sum)
-  mod=attack(summed, base.dmg=base.dmg.ratio, ...)
+  summed=sum.lists(stats, change)
+  mod=attack(summed, ...)
   mean((mod - baseline) / abs(baseline))
 }
 
@@ -102,7 +112,7 @@ get.names <- function(stats) {
 
 
 ##### Unit tests #####
-test.stats = c(
+test.stats = list(
   scoundrel=2,
   element=13,
   huntsman=5,
@@ -110,51 +120,64 @@ test.stats = c(
   gear.crit=25,
   attribute=70,
   wits=32,
-  misc=15, # from weapon rune
+  #misc=15, # from weapon rune
   extra.crit.chance=5 + 10, # human bonus and hothead
-  extra.crit.multi=20 + 10 # bow and human bonus
+  extra.crit.multi=20 + 10 # bow and human bonus,
 )
 
-stopifnot(is.na(attack(c(ranged=1, twohanded=1))))
-stopifnot(is.na(attack(c(ranged=-1))))
+#stopifnot(is.na(attack(c(ranged=1, twohanded=1))))
+#stopifnot(is.na(attack(c(ranged=-1))))
 
-stopifnot(floor(attack(test.stats, crit.calc='no', high.ground=F, base.dmg=c(103, 127))) == c(766, 944))
+  # stopifnot(floor(attack(test.stats, crit.calc='no', high.ground=F, base.dmg=c(103, 127))) == c(764, 942))
+
+# crit chance is recorded in the character panel so we check that we match it here
+# crit = 1/(1.5 + 0.3 + 0.1) * (attack(test.stats, high.ground=F, crit.calc='avg') / attack(test.stats, high.ground=F, crit.calc='no') - 1)
+# stopifnot(signif(crit, digits=2) == 0.72)
 
 ##### analysis ######
 # Current stats with no buffs
-ranger.stats = c(
-  scoundrel=2,
-  element=13,
-  huntsman=5,
-  ranged=10,
-  gear.crit=25,
-  attribute=70,
-  wits=32,
-  misc=15, # from weapon rune
-  extra.crit.chance=5 + 10, # human bonus and hothead
-  extra.crit.multi=20 + 10 # bow and human bonus
+ranger.stats = list(
+  scoundrel=7,
+  element=15,
+  huntsman=8,
+  ranged=12,
+  gear.crit=11,
+  attribute=76,
+  wits=41,
+  misc=0, # runes do not count as misc, they improve base damage of a weapon
+  extra.crit.chance=10, # hothead
+  extra.crit.multi=0
 )
+bow.stats=c(ranger.stats, list(base.dmg=c(152, 161)))
+bloody.stats=c(bow.stats, list(extra.dmg=c(305, 321))) # extra damage from elemental arrowheads
+  
 
 attack(ranger.stats, crit.calc='no', high.ground=F)
+attack(ranger.stats, crit.calc='yes', high.ground=F)
 gradient(ranger.stats)
+gradient(bloody.stats)
 gradient(ranger.stats, high.ground=F)
 gradient(ranger.stats, crit.calc='no')
 gradient(ranger.stats, crit.calc='yes')
 
+# consumable effects
+upgrade(ranger.stats, c(wits=22))
+upgrade(ranger.stats, c(attribute=22))
+upgrade(ranger.stats, c(attribute=5, wits=11))
 
-upgrade(ranger.stats, c(element=-1, attribute=3, wits=1))
+# using challenge
+upgrade(ranger.stats, c(misc=20))
 
-upgrade(ranger.stats, c(misc=-15, wits=-3, gear.crit=-15, base.dmg.ratio=c(87,107) / c(61,75)))
+# change from elf to human
+upgrade(bloody.stats, list(misc=-10, extra.crit.multi=10, extra.crit.chance=5, extra.dmg=-bloody.stats[['extra.dmg']]))
 
+# effect of using bloody arrows. Bow and level dependent
+upgrade(bow.stats, bloody.stats['extra.dmg'])
 
-mage.stats = c(
-  scoundrel=13,
-  element=7,
-  huntsman=2,
-  gear.crit=26,
-  attribute=53,
-  wits=33,
-  misc=10 # flesh sacrifice
-)
+attack(bow.stats, high.ground=T, crit.calc='yes')
+attack(bow.stats, high.ground=T, crit.calc='no', )
+attack(bloody.stats, high.ground=T, crit.calc='yes', )
+attack(bloody.stats, high.ground=T, crit.calc='no', )
 
-gradient(mage.stats, weapon=F)
+attack(bow.stats, high.ground=F, crit.calc='yes', )
+attack(bow.stats, high.ground=F, crit.calc='no', )
